@@ -15,7 +15,7 @@ def init_db():
     conn = get_connection()
     cursor = conn.cursor()
     
-    # 1. Tabel Referensi Siswa (Menyimpan Vektor Identitas Hasil Transfer Learning)
+    # 1. Tabel Referensi Siswa (Menyimpan Vektor 3 Model Sekaligus dalam Format JSON)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS siswa_referensi (
             id_siswa INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,14 +44,15 @@ def init_db():
     
     conn.commit()
     conn.close()
-    print("Database SQLite 'presensi_smk.db' dan tabel relasional berhasil disiapkan.")
 
-def simpan_siswa(nisn, nama_siswa, kelas, vektor_embedding):
-    """Menyimpan data siswa dan vektor embedding (disimpan sebagai string JSON)"""
+def simpan_siswa_multi_model(nisn, nama_siswa, kelas, vektor_dict):
+    """Menyimpan dictionary vektor 3 model: {'ArcFace': [...], 'VGG-Face': [...], 'Facenet': [...]}"""
     conn = get_connection()
     cursor = conn.cursor()
     
-    vektor_str = json.dumps(vektor_embedding.tolist() if isinstance(vektor_embedding, np.ndarray) else vektor_embedding)
+    # Serialisasi seluruh vektor numpy array ke list biasa agar bisa di-dump ke JSON
+    vektor_serial = {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in vektor_dict.items()}
+    vektor_str = json.dumps(vektor_serial)
     tanggal_daftar = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     try:
@@ -61,7 +62,7 @@ def simpan_siswa(nisn, nama_siswa, kelas, vektor_embedding):
         ''', (nisn, nama_siswa, kelas, vektor_str, tanggal_daftar))
         conn.commit()
         sukses = True
-        pesan = f"Siswa {nama_siswa} (NISN: {nisn}) berhasil didaftarkan!"
+        pesan = f"Siswa {nama_siswa} (NISN: {nisn}) berhasil didaftarkan untuk ketiga model (ArcFace, VGG-Face, FaceNet)!"
     except sqlite3.IntegrityError:
         sukses = False
         pesan = f"Error: NISN {nisn} sudah terdaftar di database."
@@ -70,8 +71,12 @@ def simpan_siswa(nisn, nama_siswa, kelas, vektor_embedding):
         
     return sukses, pesan
 
+def simpan_siswa(nisn, nama_siswa, kelas, vektor_embedding):
+    """Fungsi fallback jika masih ada kode yang memanggil versi model tunggal"""
+    return simpan_siswa_multi_model(nisn, nama_siswa, kelas, {"ArcFace": vektor_embedding})
+
 def ambil_semua_siswa():
-    """Mengambil semua siswa terdaftar beserta vektor wajahnya untuk pencocokan"""
+    """Mengambil semua siswa terdaftar beserta dictionary vektor wajahnya"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id_siswa, nisn, nama_siswa, kelas, vektor_wajah FROM siswa_referensi')
@@ -80,12 +85,19 @@ def ambil_semua_siswa():
     
     daftar_siswa = []
     for r in rows:
+        raw_vektor = json.loads(r[4])
+        # Kompatibel untuk data baru (dict 3 model) maupun data lama (vektor tunggal)
+        if isinstance(raw_vektor, dict):
+            vektor_dict = {k: np.array(v) for k, v in raw_vektor.items()}
+        else:
+            vektor_dict = {"ArcFace": np.array(raw_vektor)}
+            
         daftar_siswa.append({
             "id_siswa": r[0],
             "nisn": r[1],
             "nama_siswa": r[2],
             "kelas": r[3],
-            "vektor": np.array(json.loads(r[4]))
+            "vektor_dict": vektor_dict
         })
     return daftar_siswa
 
@@ -126,7 +138,7 @@ def ambil_log_presensi_df():
     df = pd.read_sql_query('''
         SELECT id_presensi as "ID", nama_siswa as "Nama Siswa", tanggal as "Tanggal", 
                waktu_masuk as "Jam Masuk", status as "Status", 
-               model_digunakan as "Model", ROUND(skor_jarak, 4) as "Skor Jarak (Cosine)"
+               model_digunakan as "Model", ROUND(skor_jarak, 4) as "Skor Jarak"
         FROM log_kehadiran ORDER BY id_presensi DESC
     ''', conn)
     conn.close()
@@ -149,3 +161,4 @@ def hapus_siswa(id_siswa):
 
 if __name__ == "__main__":
     init_db()
+    print("Database SQLite 'presensi_smk.db' dan tabel relasional berhasil disiapkan.")
