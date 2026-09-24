@@ -1,9 +1,8 @@
 streamlit
 deepface
 tf-keras
-mtcnn
 opencv-python-headless
-pandas
-numpy
-pillow
 scikit-learn
+pandas
+pillow
+numpy<2.0.0
